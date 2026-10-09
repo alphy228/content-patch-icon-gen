@@ -24,14 +24,17 @@
     font: 600 17px/1 var(--roman); letter-spacing: .14em; text-transform: lowercase;
     border: 1px solid #000; padding: 14px 30px 15px;
   }
-  .button:hover, .button:focus-visible{ background: #000; color: #fff; }
+  .button:focus-visible{ background: #000; color: #fff; }
+  @media (hover: hover){ .button:hover{ background: #000; color: #fff; } }  /* phones: no sticky hover after a tap */
   .button[aria-disabled="true"]{ cursor: progress; background: #fff; color: #000; opacity: .4; }
   #error{ font-style: italic; margin: 18px 0 0; }
   #out{ margin-top: 8px; }
-  pre{ display: inline-block; text-align: left; font: 15px/1.45 ui-monospace, Menlo, Consolas, monospace; margin: 0 0 8px; }
+  pre{ display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font: 15px/1.45 ui-monospace, Menlo, Consolas, monospace; margin: 0 0 8px; }
   .item{ margin: 0 0 44px; }
   .item h2{ font: 600 19px/1.2 var(--roman); letter-spacing: .08em; margin: 0 0 14px; word-break: break-word; }
   .row{ display: flex; justify-content: center; align-items: flex-end; gap: 36px; flex-wrap: wrap; }
+  .warn{ font: italic 500 17px/1.4 var(--book); max-width: 640px; margin: -6px auto 14px; overflow-wrap: anywhere; }
+  .warn p{ margin: 0 0 4px; }
   figure{ margin: 0; }
   figure img{ display: block; margin: 0 auto; image-rendering: pixelated; image-rendering: crisp-edges; }
   figcaption{ font: italic 500 16px var(--book); margin-top: 6px; }
@@ -54,14 +57,16 @@
   <a class="button" id="download" download="icons.zip" href="#">download</a>
   <hr class="rule">
   <div id="patchbox" hidden><pre id="patch"></pre><hr class="rule"></div>
+  <div id="general" class="warn" hidden></div>
   <div id="items"></div>
 </div>
 
-<footer>This thing is not very fast, but if it takes over 20 minutes something is wrong<br><br><br><br>If the option to upload files doesnt appear for a long time<br><br>either your internet connection is very bad<br><br> or evil github is throttling your ip and you should do something about it like disabling vpn<br><br><br><br><br><br>slop coded in alphy's basement</footer>
+<footer>slop coded in alphy's basement</footer>
 
 <script type="module">
 const $ = id => document.getElementById(id);
-const base = "/app" + location.pathname.replace(/[^/]*$/, "");
+//CheerpJ wants a plain path: location.pathname is URL-encoded ("%20"), CheerpJ would encode it again ("%2520")
+const base = "/app" + decodeURIComponent(location.pathname.replace(/[^/]*$/, ""));
 let Web = null, busy = false, urls = [];
 
 function state(label, ready){
@@ -69,12 +74,24 @@ function state(label, ready){
   $("pick").setAttribute("aria-disabled", String(!ready));
   $("file").disabled = !ready;
 }
+//Java exceptions from CheerpJ are not plain JS errors (String(e) throws)
+async function describe(e){
+  try{ if(e && typeof e.getMessage === "function"){ const m = await e.getMessage(); const c = await (await e.getClass()).getName(); return m ? c + ": " + m : c; } }catch(_){}
+  try{ if(e && e.message) return e.message; }catch(_){}
+  try{ return String(e); }catch(_){}
+  return "unknown error (see the browser console)";
+}
 function fail(message){
   $("error").textContent = message;
   $("error").hidden = false;
 }
 
 async function start(){
+  if(location.protocol === "file:"){
+    state("unavailable", false);
+    fail("opened from disk; browsers block that. run  python3 serve.py  in this folder, or put it on github pages");
+    return;
+  }
   try{
     await cheerpjInit({ version: 17, status: "none" });
     const lib = await cheerpjRunLibrary(base + "icongen.jar:" + base + "mindustry.jar");
@@ -85,7 +102,7 @@ async function start(){
   }catch(e){
     console.error(e);
     state("unavailable", false);
-    fail(String(e && e.message || e));
+    fail(await describe(e));
   }
 }
 
@@ -106,7 +123,7 @@ async function run(file){
     await show(r);
   }catch(e){
     console.error(e);
-    fail(String(e && e.message || e));
+    fail(await describe(e));
   }finally{
     busy = false;
     state("import zip", true);
@@ -126,6 +143,27 @@ async function show(r){
   $("download").href = blobUrl(await Web.zip(), "application/zip");
   $("patchbox").hidden = !r.patch;
   $("patch").textContent = r.patch;
+
+  //"warning: <content>: <text>" lines of the log, shown under their item (the rest above the items)
+  const warnings = new Map(), general = [];
+  for(const line of r.log.split("\n")){
+    const m = /^warning: (?:([\w-]+): )?(.*)$/.exec(line);
+    if(!m) continue;
+    if(m[1] && r.items.some(it => it.name === m[1])){
+      if(!warnings.has(m[1])) warnings.set(m[1], []);
+      warnings.get(m[1]).push(m[2]);
+    }else general.push(m[1] ? m[1] + ": " + m[2] : m[2]);
+  }
+  const warnBox = (el, list) => {
+    el.textContent = "";
+    for(const text of list){
+      const p = document.createElement("p");
+      p.textContent = text;
+      el.append(p);
+    }
+  };
+  warnBox($("general"), general);
+  $("general").hidden = !general.length;
 
   const items = $("items");
   items.textContent = "";
@@ -153,7 +191,14 @@ async function show(r){
       fig.append(img, cap);
       row.append(fig);
     }
-    el.append(h, row);
+    el.append(h);
+    if(warnings.has(item.name)){
+      const w = document.createElement("div");
+      w.className = "warn";
+      warnBox(w, warnings.get(item.name));
+      el.append(w);
+    }
+    el.append(row);
     items.append(el);
   }
   $("out").hidden = false;
